@@ -166,11 +166,12 @@ class Circuit(object):
 
 class Thermostat(Circuit):
 
-    heater_modes = {
+    operation_modes = {
         'OFF' : 0,
         'Heater': 1,
         'Solar Pref': 2,
-        'Solar Only': 3
+        'Solar Only': 3,
+        'Idle' : 4 # pump on with no heater
     }
 
     def __init__(self, number, circuit_function, update_data, request, set_skip_update_wait):
@@ -179,6 +180,7 @@ class Thermostat(Circuit):
         self.current_temperature = None
         self.target_temperature  = None
         self.heater_mode         = None
+        self.operation_mode      = None
 
     async def update(self):
         await super().update()
@@ -189,6 +191,11 @@ class Thermostat(Circuit):
         self.target_temperature  = temps[self.circuit_function + 'SetPoint']
         self.heater_mode         = temps[self.circuit_function + 'HeatModeStr']
 
+        # update operation mode
+        if self.state and self.heater_mode == 'OFF':
+            self.operation_mode = 'Idle'
+        else: self.operation_mode = self.heater_mode
+
     async def set_target_temperature(self, target_temperature):
         rjson = await self.request( self.circuit_function + "heat/setpoint/" + str(target_temperature) )
         new_target = rjson['value']
@@ -196,10 +203,23 @@ class Thermostat(Circuit):
         await self.set_skip_update_wait()
 
     async def set_heater_mode(self, target_mode):
-        desired_mode = Thermostat.heater_modes[target_mode]
+        desired_mode = Thermostat.operation_modes[target_mode]
         await self.request( self.circuit_function + 'heat/mode/' + str(desired_mode) )
         self.heater_mode = target_mode
         await self.set_skip_update_wait()
+
+    # set_operation_mode also updates the circuit on/off state
+    async def set_operation_mode(self, target_operation):
+        if target_operation == 'OFF':
+            await self.set_heater_mode(target_operation)
+            await self.set_state(0)
+        else:
+            if target_operation == 'Idle':
+                await self.set_heater_mode('OFF')
+            else:
+                await self.set_heater_mode(target_operation)
+            await self.set_state(1)
+
 
 # if __name__ == "__main__":
 #     platform = PoolControllerPlatform('10.0.1.6:3000')
