@@ -1,10 +1,9 @@
-import sys
 import asyncio
-
 import aiohttp
 import async_timeout
 
-import datetime
+import logging
+_LOGGER = logging.getLogger(__name__)
 
 class PoolControllerPlatform:
     """ Main PoolController object """
@@ -38,11 +37,11 @@ class PoolControllerPlatform:
             async with aiohttp.ClientSession() as websession:
                 loop = asyncio.get_event_loop()
                 with async_timeout.timeout(self.connection_timeout, loop=loop):
-                    print('POOLCONTROLLER API REQUEST: ' + path)
                     response = await websession.get(self.address + path, headers=self.headers)
                     json = await response.json()
                     return json
-        except Exception:
+        except Exception as e:
+            _LOGGER.error("Could not connect to poolcontroller: " + str(e))
             return None
 
     async def refresh_circuits(self):
@@ -80,9 +79,7 @@ class PoolControllerPlatform:
                 self.all_circuits.append(real_circuit)
 
     async def update_data(self):
-        print("PC API UPDATE_DATA")
         if self.update_lock.locked():
-            print("update_data LOCKED")
             return
         
         async with self.update_lock:
@@ -106,21 +103,19 @@ class PoolControllerPlatform:
 # base circuit object that all devices inherit from
 class Circuit(object):
     def __init__(self, number, circuit_function, request):
-        self.number = number
-        self.data = {}
+        self.number  = number
+        self.data    = {}
         self.request = request
         
-        self.name = None
-        self.friendlyName = None
-        self.state = None
+        self.name             = None
+        self.friendlyName     = None
+        self.state            = None
         self.circuit_function = circuit_function
 
     async def update_from_platform(self):
         self.name            = self.data['name']
         self.friendlyName    = self.data['friendlyName']
         self.state           = bool(self.data['status'])
-
-        print("circuit update " + self.name)
 
     async def set_state(self, state):
         rjson = await self.request( 'circuit/' + self.number + '/set/' + str(state) )
