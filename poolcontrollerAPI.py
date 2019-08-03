@@ -6,69 +6,48 @@ import async_timeout
 
 import datetime
 
-# CONNECTION_TIMEOUT = 5  # seconds
-
 class PoolControllerPlatform:
     """ Main PoolController object """
-    def __init__(self, ip, scan_interval=10, connection_timeout=10, useSecure=False, username=None, password=None):
-        self.ip = ip
-        self.useSecure = useSecure
-        self.address = None
-        self.gen_addr()
-
-        self.scan_interval = scan_interval
+    def __init__(self, address, username='', password='', connection_timeout=10):
+        self.address = address
+        if not self.address.endswith('/'):
+            self.address += '/'
+        
         self.connection_timeout = connection_timeout
-        self.skip_update_wait = False
-        self.next_update = None
-
         self.username = username
         self.password = password
         self.headers = None
         self.gen_headers()
 
         self.switches = []
-        self.thermostats = []
+        self.heaters = []
         self.lights = []
 
         self.update_lock = asyncio.Lock()
- 
-        # loop = asyncio.get_event_loop()
-        # loop.run_until_complete( self.init_circuits() )  
-        # self.init_circuits()
 
     def gen_headers(self):
         # not entirely sure how no-password logins work
-        if self.username or self.password:
+        if len(self.username) > 0 or len(self.password) > 0:
             b64d = self.username + ':' + self.password
             import base64
             b64e = base64.b64encode(b64d)
             self.headers = {'Authorization': 'Basic ' + b64e}
-            
-
-    def gen_addr(self):
-        http = 'https' if self.useSecure else 'http'
-        addr = http + '://' + self.ip + '/'
-        self.address = addr
 
     async def request(self, path):
         try:
             async with aiohttp.ClientSession() as websession:
                 loop = asyncio.get_event_loop()
                 with async_timeout.timeout(self.connection_timeout, loop=loop):
-                    # print('POOLCONTROLLER API REQUEST: ' + path)
+                    print('POOLCONTROLLER API REQUEST: ' + path)
                     response = await websession.get(self.address + path, headers=self.headers)
                     json = await response.json()
                     return json
         except Exception:
             return None
 
-    async def set_skip_update_wait(self, skip=True):
-        self.skip_update_wait = skip
-        # print('UPDATE WAIT WAS SKIPPED!!!!!!!!!!!!!!!!!!!!')
-
     async def refresh_circuits(self):
         self.switches = []
-        self.thermostats = []
+        self.heaters = []
         self.lights = []
         self.all_circuits = []
 
@@ -77,44 +56,36 @@ class PoolControllerPlatform:
 
         data = await self.request('circuit')
 
-        for number, circuit in data['circuit'].items():
-            circuit_function = circuit['circuitFunction'].lower()
-            cdata = circuit
+        for number, circuit_data in data['circuit'].items():
+            circuit_function = circuit_data['circuitFunction'].lower()
             
             if circuit_function == 'generic':
-                real_circuit = Circuit(str(number), circuit_function, self.update_data, self.request, self.set_skip_update_wait)
+                real_circuit = Circuit(str(number), circuit_function, self.request)
                 self.switches.append(real_circuit)
-                real_circuit.data = cdata
+                real_circuit.data = circuit_data
                 self.all_circuits.append(real_circuit)
 
             elif circuit_function == 'intellibrite':
                 # TODO: add support for light mode changing once poolcontroller #106 is fixed
-                real_circuit = Circuit(str(number), circuit_function, self.update_data, self.request, self.set_skip_update_wait)
+                real_circuit = Circuit(str(number), circuit_function, self.request)
                 self.lights.append(real_circuit)
-                real_circuit.data = cdata
+                real_circuit.data = circuit_data
                 self.all_circuits.append(real_circuit)
 
             elif circuit_function == 'spa' or circuit_function == 'pool':
-                real_circuit = Thermostat(str(number), circuit_function, self.update_data, self.request, self.set_skip_update_wait)
-                cdata['temperature'] = temps_json
-                real_circuit.data = cdata
-                self.thermostats.append(real_circuit)
+                real_circuit = Heater(str(number), circuit_function, self.request)
+                circuit_data['temperature'] = temps_json
+                real_circuit.data = circuit_data
+                self.heaters.append(real_circuit)
                 self.all_circuits.append(real_circuit)
 
-        self.next_update = datetime.datetime.now() + datetime.timedelta(seconds=self.scan_interval)
-
-
     async def update_data(self):
+        print("PC API UPDATE_DATA")
         if self.update_lock.locked():
+            print("update_data LOCKED")
             return
         
         async with self.update_lock:
-            if self.next_update > datetime.datetime.now():
-                if not self.skip_update_wait:
-                    return
-
-            self.skip_update_wait = False
-
             temps_json = await self.request('temp')
             temps_json = temps_json['temperature']
 
@@ -128,43 +99,34 @@ class PoolControllerPlatform:
                     cdata['temperature'] = temps_json
                 
                 circuit.data = cdata
-            self.next_update = datetime.datetime.now() + datetime.timedelta(seconds=self.scan_interval)
 
+                # tell circuit to grab updated data from platform
+                await circuit.update_from_platform()
 
-
-
-
+# base circuit object that all devices inherit from
 class Circuit(object):
-    def __init__(self, number, circuit_function, update_data, request, set_skip_update_wait):
+    def __init__(self, number, circuit_function, request):
         self.number = number
-        self.update_data = update_data
         self.data = {}
         self.request = request
-        self.set_skip_update_wait = set_skip_update_wait
         
         self.name = None
         self.friendlyName = None
         self.state = None
         self.circuit_function = circuit_function
 
-    async def update(self):
-        await self.update_data()
-
+    async def update_from_platform(self):
         self.name            = self.data['name']
         self.friendlyName    = self.data['friendlyName']
         self.state           = bool(self.data['status'])
 
+        print("circuit update " + self.name)
+
     async def set_state(self, state):
         rjson = await self.request( 'circuit/' + self.number + '/set/' + str(state) )
         self.state = bool(rjson['value'])
-        await self.set_skip_update_wait()
 
-
-
-                
-
-
-class Thermostat(Circuit):
+class Heater(Circuit):
 
     operation_modes = {
         'OFF' : 0,
@@ -174,16 +136,16 @@ class Thermostat(Circuit):
         'Idle' : 4 # pump on with no heater
     }
 
-    def __init__(self, number, circuit_function, update_data, request, set_skip_update_wait):
-        super().__init__(number, circuit_function, update_data, request, set_skip_update_wait)
+    def __init__(self, number, circuit_function, request):
+        super().__init__(number, circuit_function, request)
 
         self.current_temperature = None
         self.target_temperature  = None
         self.heater_mode         = None
         self.operation_mode      = None
 
-    async def update(self):
-        await super().update()
+    async def update_from_platform(self):
+        await super().update_from_platform()
 
         temps = self.data['temperature']        
 
@@ -200,13 +162,11 @@ class Thermostat(Circuit):
         rjson = await self.request( self.circuit_function + "heat/setpoint/" + str(target_temperature) )
         new_target = rjson['value']
         self.target_temperature = new_target
-        await self.set_skip_update_wait()
 
     async def set_heater_mode(self, target_mode):
-        desired_mode = Thermostat.operation_modes[target_mode]
+        desired_mode = Heater.operation_modes[target_mode]
         await self.request( self.circuit_function + 'heat/mode/' + str(desired_mode) )
         self.heater_mode = target_mode
-        await self.set_skip_update_wait()
 
     # set_operation_mode also updates the circuit on/off state
     async def set_operation_mode(self, target_operation):
