@@ -67,7 +67,7 @@ class PoolControllerPlatform:
 
             elif circuit_function == 'intellibrite':
                 # TODO: add support for light mode changing once poolcontroller #106 is fixed
-                real_circuit = Circuit(str(number), circuit_function, self.request)
+                real_circuit = Intellibrite(str(number), circuit_function, self.request)
                 self.lights.append(real_circuit)
                 real_circuit.data = circuit_data
                 self.all_circuits.append(real_circuit)
@@ -125,6 +125,44 @@ class Circuit(object):
     async def set_state(self, state):
         rjson = await self.request( 'circuit/' + self.number + '/set/' + str(state) )
         self.state = bool(rjson['value'])
+
+class Intellibrite(Circuit):
+
+    intellibriteModes = {
+        'Color Sync': 128,
+        'Color Swim': 144,
+        'Color Set': 160,
+        'Party': 177,
+        'Romance': 178,
+        'Caribbean': 179,
+        'American': 180,
+        'Sunset': 181,
+        'Royal': 182,
+        'Save': 190,
+        'Recall': 191,
+        'Blue': 193,
+        'Green': 194,
+        'Red': 195,
+        'White': 196,
+        'Magenta': 197
+}
+
+    def __init__(self, number, circuit_function, request):
+        super().__init__(number, circuit_function, request)
+
+        self.current_effect = None
+
+    async def update_from_platform(self):
+        await super().update_from_platform()
+
+        self.current_effect = self.data['light']['colorStr']
+
+    async def set_effect(self, effect):
+        mode = str(Intellibrite.intellibriteModes[effect])
+        await self.request( 'light/mode/' + mode)
+
+    def effect_list(self):
+        return list(Intellibrite.intellibriteModes.keys())
 
 class Heater(Circuit):
 
