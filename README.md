@@ -1,0 +1,1 @@
+A python client for interfacing with [poolcontroller](https://github.com/tagyoureit/nodejs-poolController) designed specifically for [HomeAssistant](https://github.com/home-assistant/home-assistant).
